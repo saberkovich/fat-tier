@@ -3,7 +3,7 @@
     Installs ZeroTier, joins network 99fea066f085690a, sets MTU to 1280.
 
     Designed to be launched with a single line:
-        irm https://raw.githubusercontent.com/USER/REPO/main/Setup-ZeroTier.ps1 | iex
+        irm https://raw.githubusercontent.com/saberkovich/fat-tier/main/Setup-ZeroTier.ps1 | iex
 
 .NOTES
     Self-elevates to Administrator via UAC automatically - no need to open an
@@ -11,38 +11,67 @@
 #>
 
 # ==================================================================
-#  CONFIG - set $ScriptUrl to the EXACT raw URL you hand out.
-#  It MUST match the URL in your one-liner, otherwise the elevated
-#  window cannot re-download the script and nothing happens.
+#  CONFIG - $ScriptUrl MUST be the EXACT raw URL you distribute
+#  (the same URL as in your one-liner). It is used to re-fetch the
+#  script for the elevated (admin) run, because a script piped through
+#  `iex` cannot recover its own text.
 # ==================================================================
-$ScriptUrl = "https://raw.githubusercontent.com/USER/REPO/main/Setup-ZeroTier.ps1"
+$ScriptUrl = "https://raw.githubusercontent.com/saberkovich/fat-tier/main/Setup-ZeroTier.ps1"
 
 $NetworkId = "99fea066f085690a"
 $TargetMTU = 1280
 
 # ------------------------------------------------------------------
-# STEP 0 - Ensure we are running as Administrator
+# STEP 0 - Ensure we are running as Administrator (self-elevate)
 # ------------------------------------------------------------------
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
            ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 
 if (-not $isAdmin) {
-    Write-Host "Requesting administrator privileges (a UAC prompt will appear)..." -ForegroundColor Yellow
-
     # $MyInvocation.MyCommand.Path is set when run from a .ps1 file on disk,
     # and $null when the script was piped in via `irm | iex`.
     $selfPath = $MyInvocation.MyCommand.Path
+
     if ($selfPath) {
-        $launchArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$selfPath`""
-    } else {
-        # Launched in-memory (irm | iex): re-run the same one-liner elevated.
-        $launchArgs = "-NoProfile -ExecutionPolicy Bypass -Command `"irm '$ScriptUrl' | iex`""
+        # Real file on disk (e.g. launched from Run-ZeroTier.bat): relaunch it elevated.
+        Write-Host "Requesting administrator privileges (a UAC prompt will appear)..." -ForegroundColor Yellow
+        Start-Process powershell.exe -Verb RunAs `
+            -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$selfPath`""
+        return
     }
 
+    # In-memory (irm | iex): download the script ONCE here in this visible window
+    # (so any error is readable), then hand it to the elevated process via a temp
+    # file. The admin window then needs no network access at all.
+    if ($ScriptUrl -match 'USER/REPO') {
+        Write-Host "[ERROR] `$ScriptUrl is still the placeholder 'USER/REPO'." -ForegroundColor Red
+        Write-Host "        Set it to your real raw URL and re-upload the script to GitHub." -ForegroundColor Yellow
+        return
+    }
+
+    try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+
+    Write-Host "Downloading script for the elevated run..." -ForegroundColor Yellow
     try {
-        Start-Process powershell.exe -Verb RunAs -ArgumentList $launchArgs
+        $code = Invoke-RestMethod -Uri $ScriptUrl -ErrorAction Stop
     } catch {
-        Write-Host "  Elevation was cancelled. Right-click PowerShell -> Run as Administrator, then retry." -ForegroundColor Red
+        Write-Host "[ERROR] Could not download the script from:" -ForegroundColor Red
+        Write-Host "        $ScriptUrl" -ForegroundColor Red
+        Write-Host "        $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "Check that `$ScriptUrl matches your one-liner and the repo is public." -ForegroundColor Yellow
+        return
+    }
+
+    $tmp = Join-Path $env:TEMP ("Setup-ZeroTier_{0}.ps1" -f [guid]::NewGuid())
+    Set-Content -LiteralPath $tmp -Value $code -Encoding UTF8
+
+    Write-Host "Requesting administrator privileges (a UAC prompt will appear)..." -ForegroundColor Yellow
+    try {
+        Start-Process powershell.exe -Verb RunAs `
+            -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$tmp`""
+    } catch {
+        Write-Host "Elevation was cancelled. Run PowerShell as Administrator and retry." -ForegroundColor Red
+        Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
     }
     return
 }
