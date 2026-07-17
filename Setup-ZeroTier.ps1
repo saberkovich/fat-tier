@@ -16,7 +16,7 @@
 #  script for the elevated (admin) run, because a script piped through
 #  `iex` cannot recover its own text.
 # ==================================================================
-$ScriptUrl = "https://raw.githubusercontent.com/saberkovich/fat-tier/main/Setup-ZeroTier.ps1"
+$ScriptUrl = "https://cdn.jsdelivr.net/gh/saberkovich/fat-tier@main/Setup-ZeroTier.ps1"
 
 $NetworkId = "99fea066f085690a"
 $TargetMTU = 1280
